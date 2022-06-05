@@ -1,11 +1,18 @@
 package ma.ssvmandroid
 
 import android.util.Log
+import com.android.tools.r8.*
+import com.android.tools.r8.origin.Origin
+import dalvik.system.InMemoryDexClassLoader
 import dev.xdark.ssvm.VirtualMachine
+import dev.xdark.ssvm.asm.Modifier
 import dev.xdark.ssvm.classloading.BootClassLoader
 import dev.xdark.ssvm.classloading.ClassParseResult
 import dev.xdark.ssvm.execution.VMException
 import dev.xdark.ssvm.fs.HostFileDescriptorManager
+import dev.xdark.ssvm.jit.JitClass
+import dev.xdark.ssvm.jit.JitCompiler
+import dev.xdark.ssvm.jit.JitInstaller
 import dev.xdark.ssvm.jvm.ManagementInterface
 import dev.xdark.ssvm.mirror.InstanceJavaClass
 import dev.xdark.ssvm.util.ClassUtil
@@ -13,15 +20,17 @@ import dev.xdark.ssvm.value.InstanceValue
 import dev.xdark.ssvm.value.ObjectValue
 import dev.xdark.ssvm.value.Value
 import org.objectweb.asm.ClassReader
+import org.objectweb.asm.MethodTooLargeException
 import java.io.File
 import java.io.IOException
 import java.io.PrintWriter
 import java.io.StringWriter
+import java.nio.ByteBuffer
 import java.util.*
 import java.util.zip.ZipFile
 
 class SSVMTest(
-    private val rtJar: ZipFile
+    private val rtJar: ZipFile,
 ) {
     private lateinit var vm: VirtualMachine
 
@@ -81,7 +90,28 @@ class SSVMTest(
         initialized = try {
             vm.bootstrap()
 
-            // Don't enable JIT, it won't work in Android (see README.md)
+            // enable JIT
+            val definer = JitDexClassLoader()
+            vm.`interface`.registerMethodEnter { ctx ->
+                val jm = ctx.method
+                val count = jm.invocationCount
+
+                if (count == 256 && !Modifier.isCompiledMethod(jm.access)) {
+                    if (JitCompiler.isCompilable(jm)) {
+                        try {
+                            println("[VM][JIT] Compiling $jm")
+
+                            val jit = JitCompiler.compile(jm, 3)
+                            JitInstaller.install(jm, definer, jit)
+                        } catch (ex: MethodTooLargeException) {
+                            val node = jm.node
+                            node.access = node.access or Modifier.ACC_JIT
+                        } catch (ex: Throwable) {
+                            throw IllegalStateException("Could not install JIT class for $jm", ex)
+                        }
+                    }
+                }
+            }
 
             true
         } catch (e: Exception) {
@@ -181,6 +211,42 @@ class SSVMTest(
         try {
             rtJar.close()
         } catch (e: Throwable) {
+        }
+    }
+
+    private inner class JitDexClassLoader: JitInstaller.ClassDefiner {
+        override fun define(jitClass: JitClass): Class<*> {
+            val code = jitClass.code
+            val buffer = transformBytecodeToDex(code)
+                ?: throw IllegalStateException("D8 failed to translate")
+
+            val inMemoryDexClassLoader = InMemoryDexClassLoader(buffer, jitClass::class.java.classLoader)
+            return inMemoryDexClassLoader.loadClass(jitClass.className)
+        }
+
+        private fun transformBytecodeToDex(javaBytecode: ByteArray): ByteBuffer? {
+            var result: ByteBuffer? = null
+
+            val d8Command = D8Command.builder()
+                .setDisableDesugaring(false)
+                .setMinApiLevel(26)
+                .addClassProgramData(javaBytecode, Origin.unknown())
+                .setProgramConsumer(object : DexIndexedConsumer {
+                    override fun finished(p0: DiagnosticsHandler?) {}
+
+                    override fun accept(
+                        fileIndex: Int,
+                        data: ByteDataView,
+                        descriptors: MutableSet<String>?,
+                        handler: DiagnosticsHandler?
+                    ) {
+                        result = ByteBuffer.wrap(data.copyByteData())
+                    }
+                })
+                .build()
+            D8.run(d8Command)
+
+            return result
         }
     }
 
