@@ -2,14 +2,15 @@ package ma.ssvmandroid
 
 import android.app.ProgressDialog
 import android.os.Bundle
+import android.util.Log
 import android.view.View
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import dev.xdark.ssvm.execution.VMException
 import ma.ssvmandroid.databinding.ActivityMainBinding
 import java.io.File
 import java.io.OutputStream
 import java.io.PrintStream
-import java.lang.StringBuilder
 import java.util.concurrent.Executors
 import java.util.zip.ZipFile
 
@@ -31,7 +32,7 @@ class MainActivity : AppCompatActivity() {
 
         binding.btnInitVM.setOnClickListener {
             if (ssvmTest.isInitialized) {
-                toast("VM already initialized")
+                toast("VM is already initialized")
                 return@setOnClickListener
             }
 
@@ -44,7 +45,7 @@ class MainActivity : AppCompatActivity() {
                 return@setOnClickListener
             }
 
-            ssvmTest.invokeMainMethod(TEST_CLASS_FQN)
+            invokeMain()
         }
     }
 
@@ -82,15 +83,39 @@ class MainActivity : AppCompatActivity() {
             "Initializing", true, false)
 
         Executors.newSingleThreadExecutor().execute {
-            ssvmTest.initVM()
+            catchVMException {
+                ssvmTest.initVM()
 
-            val testJar = extractAsset(ASSET_TEST_JAR)
-            ssvmTest.addURL(testJar)
+                val testJar = extractAsset(ASSET_TEST_JAR)
+                ssvmTest.addURL(testJar)
+            }
 
             runOnUiThread {
                 dialog.dismiss()
-                toast("Done")
+                println("[VM] Done")
             }
+        }
+    }
+
+    private fun invokeMain() {
+        catchVMException {
+            ssvmTest.invokeMainMethod(TEST_CLASS_FQN)
+        }
+    }
+
+    private fun catchVMException(runnable: () -> Unit) {
+        try {
+            runnable()
+        } catch (ex: Throwable) {
+            val cause = ex.cause
+            System.err.println(
+                "[VM] VM exception: ${
+                    if (cause is VMException) 
+                        SSVMTest.throwableToString(cause.oop) 
+                    else 
+                        Log.getStackTraceString(ex)
+                }"
+            )
         }
     }
 
@@ -109,8 +134,6 @@ class MainActivity : AppCompatActivity() {
         }
 
     companion object {
-        private const val TAG = "MainActivity"
-
         private const val ASSET_RT_JAR = "rt.jar"
         private const val ASSET_TEST_JAR = "Test.jar"
         private const val TEST_CLASS_FQN = "com/test/Test"

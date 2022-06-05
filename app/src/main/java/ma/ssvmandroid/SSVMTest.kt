@@ -185,8 +185,6 @@ class SSVMTest(
     }
 
     companion object {
-        private const val TAG = "SSVMTest"
-
         fun throwableToString(throwable: InstanceValue): String? {
             Objects.requireNonNull(throwable, "throwable")
             val javaClass = throwable.javaClass
