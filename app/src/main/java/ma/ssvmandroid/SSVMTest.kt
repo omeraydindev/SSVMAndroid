@@ -99,7 +99,7 @@ class SSVMTest(
                 if (count == 256 && !Modifier.isCompiledMethod(jm.access)) {
                     if (JitCompiler.isCompilable(jm)) {
                         try {
-                            println("[VM][JIT] Compiling $jm")
+                            println("[JIT] Compiling $jm")
 
                             val jit = JitCompiler.compile(jm, 3)
                             JitInstaller.install(jm, definer, jit)
@@ -132,15 +132,10 @@ class SSVMTest(
     }
 
     fun addURL(jarFile: File) {
-        // Add jar to system class loader
-        val cl = getVMSystemClassLoader()
-
-        addURL(cl, jarFile.absolutePath)
-    }
-
-    private fun addURL(loader: Value, jarPath: String) {
+        val classLoader = getVMSystemClassLoader()
         val helper = vm.helper
 
+        // File fileInstance = new File(jarFile.getAbsolutePath());
         val fileClass = vm.findBootstrapClass("java/io/File", true) as InstanceJavaClass
         val fileInstance = vm.memoryManager.newInstance(fileClass)
         helper.invokeExact(
@@ -148,9 +143,10 @@ class SSVMTest(
             "<init>",
             "(Ljava/lang/String;)V",
             arrayOf(),
-            arrayOf(fileInstance, helper.newUtf8(jarPath))
+            arrayOf(fileInstance, helper.newUtf8(jarFile.absolutePath))
         )
 
+        // URI uri = fileInstance.toURI();
         val uri = helper.invokeVirtual(
             "toURI",
             "()Ljava/net/URI;",
@@ -158,6 +154,7 @@ class SSVMTest(
             arrayOf(fileInstance)
         ).result
 
+        // URL url = uri.toURL();
         val url = helper.invokeVirtual(
             "toURL",
             "()Ljava/net/URL;",
@@ -165,11 +162,12 @@ class SSVMTest(
             arrayOf(uri)
         ).result
 
+        // classLoader.addURL(url);
         helper.invokeVirtual(
             "addURL",
             "(Ljava/net/URL;)V",
             arrayOf(),
-            arrayOf(loader, url)
+            arrayOf(classLoader, url)
         )
     }
 
@@ -178,10 +176,10 @@ class SSVMTest(
         val symbols = vm.symbols
 
         try {
-            val cl = getVMSystemClassLoader()
+            val classLoader = getVMSystemClassLoader()
 
             val klass = helper.findClass(
-                cl as ObjectValue,
+                classLoader as ObjectValue,
                 className,
                 true
             ) as InstanceJavaClass
@@ -214,7 +212,7 @@ class SSVMTest(
         }
     }
 
-    private inner class JitDexClassLoader: JitInstaller.ClassDefiner {
+    private class JitDexClassLoader: JitInstaller.ClassDefiner {
         override fun define(jitClass: JitClass): Class<*> {
             val code = jitClass.code
             val buffer = transformBytecodeToDex(code)

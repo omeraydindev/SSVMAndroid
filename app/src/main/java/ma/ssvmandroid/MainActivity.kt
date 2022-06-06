@@ -70,6 +70,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun initVM() {
         viewModel.runProgressTask {
+            val time = System.currentTimeMillis()
+
             catchVMException {
                 // init VM
                 ssvmTest.initVM()
@@ -79,7 +81,7 @@ class MainActivity : AppCompatActivity() {
                 ssvmTest.addURL(testJar)
             }
 
-            println("[VM] Done")
+            println("[VM] Initialized in ${System.currentTimeMillis() - time} ms")
         }
     }
 
