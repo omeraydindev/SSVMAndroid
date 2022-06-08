@@ -73,6 +73,8 @@ class MainActivity : AppCompatActivity() {
             val time = System.currentTimeMillis()
 
             catchVMException {
+                ssvmTest.addProperty("user.home", getExternalFilesDir("user_home")!!.absolutePath)
+                ssvmTest.addProperty("java.home", getExternalFilesDir("java_home")!!.absolutePath)
                 // init VM
                 ssvmTest.initVM()
 
