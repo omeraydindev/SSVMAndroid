@@ -32,61 +32,43 @@ import java.util.zip.ZipFile
 class SSVMTest(
     private val rtJar: ZipFile,
 ) {
-    private lateinit var vm: VirtualMachine
+    private val vm: VirtualMachine = object : VirtualMachine(DefaultVMInitializer()) {
+        override fun createFileDescriptorManager() = HostFileDescriptorManager()
+
+        override fun createManagementInterface() = object : ManagementInterface {
+            override fun getVersion() = "null"
+
+            override fun getStartupTime() = System.currentTimeMillis()
+
+            override fun getInputArguments() = listOf<String>()
+        }
+
+        override fun createBootClassLoader() = BootClassLoader {
+            println("[VM] Loading: $it.class")
+
+            try {
+                val entry = rtJar.getEntry("$it.class")
+                    ?: return@BootClassLoader null
+
+                rtJar.getInputStream(entry).use { stream ->
+                    val cr = ClassReader(stream)
+                    val node = ClassUtil.readNode(cr)
+
+                    return@BootClassLoader ClassParseResult(cr, node)
+                }
+            } catch (e: IOException) {
+                System.err.println("[VM] Couldn't load class $it: ${Log.getStackTraceString(e)}")
+            }
+
+            return@BootClassLoader null
+        }
+    }
 
     private var initialized: Boolean = false
     val isInitialized: Boolean
         get() = initialized
 
     fun initVM() {
-        vm = object : VirtualMachine() {
-            override fun createFileDescriptorManager() = HostFileDescriptorManager()
-
-            override fun createManagementInterface() = object : ManagementInterface {
-                override fun getVersion() = "null"
-
-                override fun getStartupTime() = System.currentTimeMillis()
-
-                override fun getInputArguments() = listOf<String>()
-            }
-
-            override fun createBootClassLoader() = BootClassLoader {
-                println("[VM] Loading: $it.class")
-
-                try {
-                    val entry = rtJar.getEntry("$it.class")
-                        ?: return@BootClassLoader null
-
-                    rtJar.getInputStream(entry).use { stream ->
-                        val cr = ClassReader(stream)
-                        val node = ClassUtil.readNode(cr)
-
-                        return@BootClassLoader ClassParseResult(cr, node)
-                    }
-                } catch (e: IOException) {
-                    System.err.println("[VM] Couldn't load class $it: ${Log.getStackTraceString(e)}")
-                }
-
-                return@BootClassLoader null
-            }
-        }
-
-        vm.properties.apply {
-            setProperty("sun.stderr.encoding", "UTF-8")
-            setProperty("sun.stdout.encoding", "UTF-8")
-            setProperty("sun.jnu.encoding", "UTF-8")
-            setProperty("line.separator", "\n")
-            setProperty("path.separator", ":")
-            setProperty("file.separator", "/")
-            setProperty("java.home", "/usr/lib/jvm")
-            setProperty("user.home", "/home/mike")
-            setProperty("user.dir", "/home/mike")
-            setProperty("user.name", "mike")
-            setProperty("os.version", "10.0")
-            setProperty("os.arch", "amd64")
-            setProperty("os.name", "Linux")
-        }
-
         initialized = try {
             vm.bootstrap()
 
@@ -118,6 +100,10 @@ class SSVMTest(
             System.err.println("[VM] Couldn't start VM: ${Log.getStackTraceString(e)}")
             false
         }
+    }
+
+    fun init() {
+
     }
 
     private fun getVMSystemClassLoader(): Value {
@@ -190,7 +176,6 @@ class SSVMTest(
             )
 
             helper.invokeStatic(
-                klass,
                 method,
                 arrayOf(),
                 arrayOf(helper.emptyArray(symbols.java_lang_String()))
@@ -212,13 +197,18 @@ class SSVMTest(
         }
     }
 
-    private class JitDexClassLoader: JitInstaller.ClassDefiner {
+    fun addProperty(key: String, value: String) {
+        vm.properties.setProperty(key, value)
+    }
+
+    private class JitDexClassLoader : JitInstaller.ClassDefiner {
         override fun define(jitClass: JitClass): Class<*> {
             val code = jitClass.code
             val buffer = transformBytecodeToDex(code)
                 ?: throw IllegalStateException("D8 failed to translate")
 
-            val inMemoryDexClassLoader = InMemoryDexClassLoader(buffer, jitClass::class.java.classLoader)
+            val inMemoryDexClassLoader =
+                InMemoryDexClassLoader(buffer, jitClass::class.java.classLoader)
             return inMemoryDexClassLoader.loadClass(jitClass.className)
         }
 
